@@ -1,0 +1,11 @@
+(dependencies | summarize count() by target) 
+| join kind=leftouter (dependencies 
+    | where success != "True"
+    | summarize count() by target) 
+on target
+| project 
+    target, 
+    total=count_,
+    failed = iff(isnull(count_1),0,count_1)
+| extend 
+    failedRate = failed/total*100;
