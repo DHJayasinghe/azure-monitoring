@@ -1,3 +1,5 @@
+let baseLineFailedRate = 10;
+
 (dependencies | summarize count() by target) 
 | join kind=leftouter (dependencies 
     | where success != "True"
@@ -5,7 +7,8 @@
 on target
 | project 
     target, 
-    total=count_,
-    failed = iff(isnull(count_1),0,count_1)
+    total=todecimal(count_),
+    failed = iff(isnull(count_1),decimal(0),todecimal(count_1))
 | extend 
-    failedRate = failed/total*100;
+    failedRate = round(failed/total*100,2)
+| where failedRate > baseLineFailedRate;
