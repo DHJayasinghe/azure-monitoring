@@ -1,0 +1,15 @@
+let baseLineFailedRate = 10;
+
+(AppDependencies | summarize count() by Target,AppRoleName) 
+| join kind=leftouter (AppDependencies 
+    | where Success != true
+    | summarize count() by Target,AppRoleName) 
+on Target,AppRoleName
+| where AppRoleName contains 'MY_APPSERVICE_INSTANCE_NAME'
+| project 
+    Target, 
+    total=todecimal(count_),
+    failed = iff(isnull(count_1),decimal(0),todecimal(count_1))
+| extend 
+    failedRate = round(failed/total*100,2)
+| where failedRate > baseLineFailedRate;
