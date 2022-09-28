@@ -5,6 +5,7 @@ var services = builder.Services;
 services
     .AddHealthChecksUI()
     .AddInMemoryStorage();
+services.AddControllers();
 
 var app = builder.Build();
 
@@ -16,8 +17,9 @@ if (!app.Environment.IsDevelopment())
     app.UseHsts();
 }
 
-app.UseHealthChecksUI(config => config.UIPath = "/hc-ui");
+app.UseHealthChecksUI(config => { config.UIPath = "/hc-ui"; });
 app.UseHttpsRedirection();
 
-app.UseRouting();
+app.UseRouting()
+    .UseEndpoints(endpoints => endpoints.MapControllers());
 app.Run();
