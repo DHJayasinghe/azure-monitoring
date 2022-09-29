@@ -12,7 +12,7 @@ namespace HealthCheck
     {
         private static readonly decimal baseLineFailedRate = 10;
         private static readonly LogsQueryClient client = new(new VisualStudioCredential());
-        private static readonly string workspaceId = "e3ecd9a6-9839-4782-afb7-5d42ac6a4ed3";
+        private readonly string workspaceId;
         private static readonly string dependecy_graph_query = @"(AppDependencies 
                 | where AppRoleName == '{0}' 
                 | summarize count(),avg(DurationMs) by Target,AppRoleName,DependencyType) 
@@ -26,35 +26,22 @@ namespace HealthCheck
                     avg_DurationMs,
                     total=todecimal(count_),
                     failed = iff(isnull(count_1),decimal(0),todecimal(count_1))";
+
         private readonly IConfiguration _configuration;
         public HealthCheckController(IConfiguration configuration)
         {
             _configuration = configuration;
+            workspaceId = configuration.GetValue<string>("LogAnalyticsWorkspaceId");
         }
 
-        public async Task<IActionResult> Get()
+        public async Task<IActionResult> Get(string instanceName)
         {
-            var a = _configuration.GetSection("HealthChecks-UI").AsEnumerable().ToList();
-            //var myArray = _configuration.GetSection("HealthChecks-UI").Get<HealthCheckConfig>();
-            //var config = _configuration.GetSection("HealthChecks-UI").GetValue<HealthEndpointsConfig[]>("HealthChecks");
-            var instanceName = "sim-jrc-bna-maintenance-svc-aue";
-
-            var criticalComponents = new Dictionary<string, HealthData> {
-                { "queue.core.windows.net", new( HealthStatus.Degraded,"Storage Queue") },
-                { "blob.core.windows.net",new( HealthStatus.Unhealthy, "Blob Storage") },
-                { "table.core.windows.net",new( HealthStatus.Unhealthy, "Table Storage") },
-                { "documents.azure.com", new(HealthStatus.Unhealthy, "CosmosDB") },
-                { "xero.com",new(HealthStatus.Unhealthy, "Xero") },
-                { "pam-web-svc-aue.azurewebsites.net",new(HealthStatus.Unhealthy,"PAM") },
-                { "stripe.com", new(HealthStatus.Unhealthy,"Stripe") },
-                { "identitysimulation.bricksandagent.com", new(HealthStatus.Degraded,"Identity Server") },
-                { "database.windows.net",new( HealthStatus.Degraded, "Database") },
-                { "servicebus.windows.net",new( HealthStatus.Degraded, "Service Bus") }
-            };
+            var criticalComponents = (_configuration.GetSection("HealthChecks-UI").Get<HealthCheckConfig>())
+                .HealthChecks.Single(d => d.Uri.EndsWith(instanceName)).Components;
             string query = string.Format(dependecy_graph_query, instanceName);
 
-            LogsTable dailyHealthReport = (await client.QueryWorkspaceAsync(workspaceId, query, new QueryTimeRange(TimeSpan.FromDays(1)))).Value.Table;
-            LogsTable recentHealthReport = (await client.QueryWorkspaceAsync(workspaceId, query, new QueryTimeRange(TimeSpan.FromMinutes(5)))).Value.Table;
+            LogsTable dailyHealthReport = (await client.QueryWorkspaceAsync(workspaceId, query, new QueryTimeRange(TimeSpan.FromHours(4)))).Value.Table;
+            LogsTable recentHealthReport = (await client.QueryWorkspaceAsync(workspaceId, query, new QueryTimeRange(TimeSpan.FromMinutes(15)))).Value.Table;
 
             Dictionary<string, EntryHealthStatus> dailyHealthReportEntries = GetHealthReportEntries(criticalComponents, dailyHealthReport);
             Dictionary<string, EntryHealthStatus> recentHealthReportEntries = GetHealthReportEntries(criticalComponents, recentHealthReport);
@@ -130,6 +117,7 @@ internal class EntryHealthStatus
 
 internal class HealthData
 {
+    public HealthData() { }
     public HealthData(HealthStatus status, string name)
     {
         Status = status;
@@ -144,7 +132,7 @@ internal sealed class HealthCheckConfig
 {
     public List<HealthEndpointsConfig> HealthChecks { get; set; }
 }
-internal class HealthEndpointsConfig
+internal sealed class HealthEndpointsConfig
 {
     public string Name { get; set; }
     public string Uri { get; set; }
