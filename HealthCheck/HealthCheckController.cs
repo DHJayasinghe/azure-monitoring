@@ -1,5 +1,4 @@
-﻿using Azure;
-using Azure.Identity;
+﻿using Azure.Identity;
 using Azure.Monitor.Query;
 using Azure.Monitor.Query.Models;
 using Microsoft.AspNetCore.Mvc;
@@ -13,7 +12,7 @@ namespace HealthCheck
     {
         private static readonly decimal baseLineFailedRate = 10;
         private static readonly LogsQueryClient client = new(new VisualStudioCredential());
-        private static readonly string workspaceId = "";
+        private static readonly string workspaceId = "e3ecd9a6-9839-4782-afb7-5d42ac6a4ed3";
         private static readonly string dependecy_graph_query = @"(AppDependencies 
                 | where AppRoleName == '{0}' 
                 | summarize count(),avg(DurationMs) by Target,AppRoleName,DependencyType) 
@@ -27,10 +26,19 @@ namespace HealthCheck
                     avg_DurationMs,
                     total=todecimal(count_),
                     failed = iff(isnull(count_1),decimal(0),todecimal(count_1))";
+        private readonly IConfiguration _configuration;
+        public HealthCheckController(IConfiguration configuration)
+        {
+            _configuration = configuration;
+        }
 
         public async Task<IActionResult> Get()
         {
+            var a = _configuration.GetSection("HealthChecks-UI").AsEnumerable().ToList();
+            //var myArray = _configuration.GetSection("HealthChecks-UI").Get<HealthCheckConfig>();
+            //var config = _configuration.GetSection("HealthChecks-UI").GetValue<HealthEndpointsConfig[]>("HealthChecks");
             var instanceName = "sim-jrc-bna-maintenance-svc-aue";
+
             var criticalComponents = new Dictionary<string, HealthData> {
                 { "queue.core.windows.net", new( HealthStatus.Degraded,"Storage Queue") },
                 { "blob.core.windows.net",new( HealthStatus.Unhealthy, "Blob Storage") },
@@ -44,10 +52,31 @@ namespace HealthCheck
                 { "servicebus.windows.net",new( HealthStatus.Degraded, "Service Bus") }
             };
             string query = string.Format(dependecy_graph_query, instanceName);
-            Response<LogsQueryResult> response = await client.QueryWorkspaceAsync(workspaceId, query, new QueryTimeRange(TimeSpan.FromDays(1)));
 
-            LogsTable table = response.Value.Table;
+            LogsTable dailyHealthReport = (await client.QueryWorkspaceAsync(workspaceId, query, new QueryTimeRange(TimeSpan.FromDays(1)))).Value.Table;
+            LogsTable recentHealthReport = (await client.QueryWorkspaceAsync(workspaceId, query, new QueryTimeRange(TimeSpan.FromMinutes(5)))).Value.Table;
 
+            Dictionary<string, EntryHealthStatus> dailyHealthReportEntries = GetHealthReportEntries(criticalComponents, dailyHealthReport);
+            Dictionary<string, EntryHealthStatus> recentHealthReportEntries = GetHealthReportEntries(criticalComponents, recentHealthReport);
+
+            recentHealthReportEntries.Keys.ToList().ForEach(key =>
+            {
+                if (!dailyHealthReportEntries.TryAdd(key, recentHealthReportEntries[key]))
+                    dailyHealthReportEntries[key] = recentHealthReportEntries[key];
+
+            });
+
+            return Ok(new
+            {
+                status = (dailyHealthReportEntries.Any(e => e.Value.Status == HealthStatus.Degraded.ToString()) ? HealthStatus.Degraded
+                    : dailyHealthReportEntries.Any(e => e.Value.Status == HealthStatus.Unhealthy.ToString()) ? HealthStatus.Unhealthy : HealthStatus.Healthy)
+                    .ToString(),
+                entries = dailyHealthReportEntries
+            });
+        }
+
+        private static Dictionary<string, EntryHealthStatus> GetHealthReportEntries(Dictionary<string, HealthData> criticalComponents, LogsTable table)
+        {
             var entries = new Dictionary<string, EntryHealthStatus>();
             foreach (var row in table.Rows)
             {
@@ -83,13 +112,7 @@ namespace HealthCheck
                 }
             }
 
-            return Ok(new
-            {
-                status = (entries.Any(e => e.Value.Status == HealthStatus.Degraded.ToString()) ? HealthStatus.Degraded
-                    : entries.Any(e => e.Value.Status == HealthStatus.Unhealthy.ToString()) ? HealthStatus.Unhealthy : HealthStatus.Healthy)
-                    .ToString(),
-                entries
-            });
+            return entries;
         }
     }
 }
@@ -115,4 +138,15 @@ internal class HealthData
 
     public HealthStatus Status { get; set; }
     public string Name { get; set; }
+}
+
+internal sealed class HealthCheckConfig
+{
+    public List<HealthEndpointsConfig> HealthChecks { get; set; }
+}
+internal class HealthEndpointsConfig
+{
+    public string Name { get; set; }
+    public string Uri { get; set; }
+    public Dictionary<string, HealthData> Components { get; set; }
 }
